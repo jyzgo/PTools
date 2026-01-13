@@ -1,0 +1,10 @@
+*.enc
+*.dec
+*.key
+*.pem
+*.p12
+__pycache__/
+*.pyc
+.venv/
+
+
