@@ -30,3 +30,4 @@
 - 已完成：更新 `task_plan.md/findings.md/progress.md` 写入本次目标与约束。
 - 已完成：新增 `video_split/video_split.py` 与 `video_split/README.md`
 - 已完成：冒烟 `python video_split/video_split.py --help`、`python -m py_compile video_split/video_split.py`
+- 已完成：支持一次输入多个源文件，并且跨文件输出编号连续（`--startIndex` 起始编号）

@@ -155,21 +155,6 @@ def _ffmpeg_copy_cmd(in_path: Path, *, out_path: Path, tools: Tools) -> list[str
     ]
 
 
-def _build_output_paths(
-    in_path: Path,
-    *,
-    output_dir: Path | None,
-    digits: int,
-) -> tuple[Path, str]:
-    if output_dir is None:
-        output_dir = in_path.parent / f"{in_path.stem}_split"
-
-    suffix = in_path.suffix or ".mp4"
-    output_template = str(output_dir / f"%0{digits}d_{in_path.stem}{suffix}")
-    output_single = output_dir / f"{1:0{digits}d}_{in_path.stem}{suffix}"
-    return output_single, output_template
-
-
 def _ffmpeg_copy_single(in_path: Path, *, out_path: Path, tools: Tools) -> None:
     cmd = _ffmpeg_copy_cmd(in_path, out_path=out_path, tools=tools)
     result = _run(cmd)
@@ -183,14 +168,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     p.add_argument(
-        "input",
-        nargs="?",
-        help="Input video file path (also supports --in).",
+        "inputs",
+        nargs="*",
+        help="Input video file paths (you can pass multiple).",
     )
     p.add_argument(
         "--in",
-        dest="in_path",
-        help="Input video file path (same as positional input).",
+        dest="in_paths",
+        action="append",
+        help="Input video file path (can repeat; same as positional inputs).",
     )
 
     mode = p.add_mutually_exclusive_group(required=True)
@@ -202,7 +188,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p.add_argument(
         "--output-dir",
-        help="Output directory. Default: <input_dir>/<input_stem>_split",
+        help=(
+            "Output directory. Default: for single input -> <input_dir>/<input_stem>_split; "
+            "for multiple inputs -> <first_input_dir>/video_split_out"
+        ),
     )
     p.add_argument(
         "--digits",
@@ -216,7 +205,10 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="start_index",
         type=int,
         default=1,
-        help="Start index for numbering, e.g. 17 -> 017_... (alias: --start-number). Default: 1.",
+        help=(
+            "Start index for numbering, e.g. 17 -> 017_... (alias: --start-number). "
+            "When multiple inputs are provided, numbering will continue across files. Default: 1."
+        ),
     )
 
     p.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg executable name/path.")
@@ -226,19 +218,67 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _resolve_existing_file(path_raw: str) -> Path:
+    path = Path(path_raw).expanduser().resolve()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(str(path))
+    return path
+
+
+def _default_output_dir(in_paths: list[Path]) -> Path:
+    if len(in_paths) == 1:
+        in_path = in_paths[0]
+        return in_path.parent / f"{in_path.stem}_split"
+    # Multiple inputs: default to a single shared output folder so numbering can be continuous.
+    return in_paths[0].parent / "video_split_out"
+
+
+def _next_start_index_from_dir(output_dir: Path, *, digits: int, fallback: int) -> int:
+    """
+    Determine next start index by scanning output_dir for files like:
+      ^\\d+_...
+    and returning (max + 1). If none found, return fallback.
+    """
+    max_index = 0
+
+    if not output_dir.exists() or not output_dir.is_dir():
+        return fallback
+
+    for p in output_dir.iterdir():
+        if not p.is_file():
+            continue
+        name = p.name
+        underscore_pos = name.find("_")
+        if underscore_pos <= 0:
+            continue
+        head = name[:underscore_pos]
+        if not head.isdigit():
+            continue
+        if len(head) < digits:
+            # Be conservative: keep current digits setting as a minimum width.
+            # (This should not happen for files produced by this tool.)
+            continue
+        idx = int(head, 10)
+        if idx > max_index:
+            max_index = idx
+
+    return (max_index + 1) if max_index > 0 else fallback
+
+
 def main(argv: list[str]) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    in_raw = (args.in_path or args.input or "").strip()
-    if not in_raw:
-        parser.error("Missing input video path. Provide positional input or --in.")
-        return 2
+    raw_inputs: list[str] = []
+    if args.in_paths:
+        raw_inputs.extend(args.in_paths)
+    if args.inputs:
+        raw_inputs.extend(args.inputs)
 
-    in_path = Path(in_raw).expanduser().resolve()
-    if not in_path.exists() or not in_path.is_file():
-        sys.stderr.write(f"ERROR: input not found: {in_path}\n")
-        return 1
+    raw_inputs = [s.strip() for s in raw_inputs if str(s).strip()]
+    if not raw_inputs:
+        parser.error("Missing input video path(s). Provide positional inputs or one/more --in.")
+        return 2
 
     if args.digits <= 0:
         sys.stderr.write("ERROR: --digits must be > 0\n")
@@ -248,74 +288,105 @@ def main(argv: list[str]) -> int:
         return 1
 
     tools = Tools(ffmpeg=args.ffmpeg, ffprobe=args.ffprobe)
-    output_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else None
+    try:
+        in_paths = [_resolve_existing_file(p) for p in raw_inputs]
+    except FileNotFoundError as exc:
+        sys.stderr.write(f"ERROR: input not found: {exc}\n")
+        return 1
 
-    out_single, out_template = _build_output_paths(in_path, output_dir=output_dir, digits=args.digits)
-    segment_format = _segment_format_from_suffix(in_path.suffix)
+    output_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else _default_output_dir(in_paths)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Note: PTools UI typically passes args via Arg1..Arg3; keep prints concise and deterministic.
     try:
-        out_single.parent.mkdir(parents=True, exist_ok=True)
+        current_start = args.start_index
 
-        if args.count is not None:
-            if args.count <= 0:
-                raise ValueError("--count must be > 0")
+        for in_path in in_paths:
+            suffix = in_path.suffix or ".mp4"
+            out_template = str(output_dir / f"%0{args.digits}d_{in_path.stem}{suffix}")
+            out_single = output_dir / f"{current_start:0{args.digits}d}_{in_path.stem}{suffix}"
+            segment_format = _segment_format_from_suffix(in_path.suffix)
 
-            if args.count == 1:
-                cmd = _ffmpeg_copy_cmd(in_path, out_path=out_single, tools=tools)
+            if args.count is not None:
+                if args.count <= 0:
+                    raise ValueError("--count must be > 0")
+
+                if args.count == 1:
+                    cmd = _ffmpeg_copy_cmd(in_path, out_path=out_single, tools=tools)
+                    if args.dry_run:
+                        sys.stdout.write(" ".join(cmd) + "\n")
+                    else:
+                        _ffmpeg_copy_single(in_path, out_path=out_single, tools=tools)
+                    current_start = _next_start_index_from_dir(output_dir, digits=args.digits, fallback=current_start + 1)
+                    continue
+
+                duration = _probe_duration_seconds(in_path, tools=tools)
+                cut_times = [duration * i / args.count for i in range(1, args.count)]
+                cut_times = [t for t in cut_times if 0 < t < duration]
+
+                cmd = _ffmpeg_segment_cmd_base(
+                    in_path,
+                    tools=tools,
+                    segment_format=segment_format,
+                    start_number=current_start,
+                )
+                cmd += ["-segment_times", ",".join(f"{t:.3f}" for t in cut_times)]
+                cmd.append(out_template)
+
                 if args.dry_run:
                     sys.stdout.write(" ".join(cmd) + "\n")
-                    return 0
-                _ffmpeg_copy_single(in_path, out_path=out_single, tools=tools)
-                sys.stdout.write(f"OK: {out_single}\n")
-                return 0
+                else:
+                    result = _run(cmd)
+                    _require_success(result, cmd=cmd)
 
-            duration = _probe_duration_seconds(in_path, tools=tools)
-            cut_times = [duration * i / args.count for i in range(1, args.count)]
-            cut_times = [t for t in cut_times if 0 < t < duration]
+                current_start = _next_start_index_from_dir(
+                    output_dir,
+                    digits=args.digits,
+                    fallback=current_start + args.count,
+                )
+                continue
 
-            cmd = _ffmpeg_segment_cmd_base(
-                in_path,
-                tools=tools,
-                segment_format=segment_format,
-                start_number=args.start_index,
-            )
-            cmd += ["-segment_times", ",".join(f"{t:.3f}" for t in cut_times)]
-            cmd.append(out_template)
+            if args.duration is not None:
+                seconds = _parse_duration_to_seconds(args.duration)
+                cmd = _ffmpeg_segment_cmd_base(
+                    in_path,
+                    tools=tools,
+                    segment_format=segment_format,
+                    start_number=current_start,
+                )
+                cmd += ["-segment_time", f"{seconds:.3f}"]
+                cmd.append(out_template)
 
-            if args.dry_run:
-                sys.stdout.write(" ".join(cmd) + "\n")
-                return 0
+                if args.dry_run:
+                    sys.stdout.write(" ".join(cmd) + "\n")
+                    current_start = _next_start_index_from_dir(
+                        output_dir,
+                        digits=args.digits,
+                        fallback=current_start + 1,
+                    )
+                    continue
+                else:
+                    result = _run(cmd)
+                    _require_success(result, cmd=cmd)
 
-            result = _run(cmd)
-            _require_success(result, cmd=cmd)
+                # Conservative fallback if the directory scan doesn't find anything new.
+                duration = _probe_duration_seconds(in_path, tools=tools)
+                expected_segments = max(1, int(math.ceil(duration / seconds)))
+                current_start = _next_start_index_from_dir(
+                    output_dir,
+                    digits=args.digits,
+                    fallback=current_start + expected_segments,
+                )
+                continue
 
-            sys.stdout.write(f"OK: {out_single.parent}\n")
+            parser.error("Internal error: no split mode selected.")
+            return 2
+
+        if args.dry_run:
             return 0
 
-        if args.duration is not None:
-            seconds = _parse_duration_to_seconds(args.duration)
-
-            cmd = _ffmpeg_segment_cmd_base(
-                in_path,
-                tools=tools,
-                segment_format=segment_format,
-                start_number=args.start_index,
-            )
-            cmd += ["-segment_time", f"{seconds:.3f}"]
-            cmd.append(out_template)
-
-            if args.dry_run:
-                sys.stdout.write(" ".join(cmd) + "\n")
-                return 0
-
-            result = _run(cmd)
-            _require_success(result, cmd=cmd)
-            sys.stdout.write(f"OK: {out_single.parent}\n")
-            return 0
-
-        parser.error("Internal error: no split mode selected.")
-        return 2
+        sys.stdout.write(f"OK: {output_dir}\n")
+        return 0
     except FileNotFoundError as exc:
         # Typically ffmpeg/ffprobe missing.
         sys.stderr.write(

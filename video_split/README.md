@@ -37,6 +37,17 @@ python video_split.py "D:\path\to\input.mp4" --duration 00:00:10
 python video_split.py "D:\path\to\input.mp4" --count 5 --startIndex 017
 ```
 
+#### 一次输入多个源文件（编号连续）
+
+```bash
+python video_split.py "D:\path\a.mp4" "D:\path\b.mp4" --duration 10 --startIndex 017 --output-dir "D:\out\clips"
+```
+
+说明：
+- 多个输入会按你提供的顺序依次切割
+- 输出前缀编号会在文件之间 **连续累加**
+- 如果你不指定 `--output-dir`，多文件模式默认输出到：`<第一个文件所在目录>\video_split_out\`
+
 #### 指定输出目录
 
 ```bash

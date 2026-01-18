@@ -49,6 +49,7 @@
 ### Phase 2 — 工具实现 [complete]
 - [x] 实现 `video_split/video_split.py`（ffprobe 获取时长、ffmpeg segment 切割）
 - [x] 实现输出命名：`%03d_<原文件名>.<原扩展名>`（从 001 开始）
+- [x] 支持一次输入多个源文件，跨文件编号连续（`--startIndex`）
 
 ### Phase 3 — 文档与验证 [complete]
 - [x] 新增 `video_split/README.md`（安装/前置依赖/示例命令）
