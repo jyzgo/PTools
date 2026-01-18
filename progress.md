@@ -25,3 +25,8 @@
 - 根目录脚本改为入口薄封装：`PTools.py` / `SafesvnResolver.py` / `offy.py`
 - 校验：`python -m py_compile` 对全部入口与模块通过
 
+## 2026-01-17
+- 计划：新增视频切割工具 `video_split/`（按份数或时长切割，输出前缀 `001_002_...`）。
+- 已完成：更新 `task_plan.md/findings.md/progress.md` 写入本次目标与约束。
+- 已完成：新增 `video_split/video_split.py` 与 `video_split/README.md`
+- 已完成：冒烟 `python video_split/video_split.py --help`、`python -m py_compile video_split/video_split.py`

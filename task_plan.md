@@ -29,6 +29,31 @@
 |---|---:|---|
 | (none) |  |  |
 
+# 新工具：视频切割（video_split）实现计划（2026-01-17）
+
+## Goal
+- 新增一个工具：输入一个视频文件路径，可按 **份数** 或 **时长** 切割输出为多个小文件。
+- 输出文件名前缀自动添加序号：`001_`、`002_`…
+- 工具脚本放在独立文件夹中，以便被 `PTools` 自动递归发现并运行。
+
+## Constraints / Principles
+- 最小化改动：不改动 `PTools` 扫描/运行机制，仅新增一个新工具文件夹与脚本。
+- 依赖最少：优先使用外部 `ffmpeg/ffprobe`（无需引入重型 Python 视频库）。
+- 清晰 CLI：同时兼容 `PTools` UI 传入的“Path + Arg1~Arg3”，也支持命令行直跑。
+
+## Phases
+### Phase 1 — 现状确认与接口设计 [complete]
+- [x] 确认 `PTools` 会递归发现根目录下的脚本（含子文件夹）
+- [x] 定义 `video_split` CLI 参数（按份数 / 按时长）
+
+### Phase 2 — 工具实现 [complete]
+- [x] 实现 `video_split/video_split.py`（ffprobe 获取时长、ffmpeg segment 切割）
+- [x] 实现输出命名：`%03d_<原文件名>.<原扩展名>`（从 001 开始）
+
+### Phase 3 — 文档与验证 [complete]
+- [x] 新增 `video_split/README.md`（安装/前置依赖/示例命令）
+- [x] 冒烟：`python video_split/video_split.py --help`、`python -m py_compile`
+
 # PTools 实现计划
 
 ## 目标

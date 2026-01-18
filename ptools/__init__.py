@@ -1,2 +1,0 @@
-"""PTools UI package."""
-
